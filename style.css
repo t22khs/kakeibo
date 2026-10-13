@@ -91,6 +91,18 @@ main { max-width: 560px; margin: 0 auto; padding: 0 16px; }
 .view { display: none; }
 .view.active { display: block; }
 
+.asset-card {
+  width: 100%; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+  border: none; border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px;
+  background: var(--accent); color: #fff; box-shadow: var(--shadow);
+}
+.asset-card .label { color: inherit; opacity: .85; }
+.asset-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.asset-sub { font-size: 12.5px; opacity: .85; font-variant-numeric: tabular-nums; }
+.asset-card.unset { background: var(--surface); color: var(--text); border: 1.5px dashed var(--line); box-shadow: none; }
+.asset-card.unset .asset-value { font-size: 15px; color: var(--accent); }
+@media (prefers-color-scheme: dark) { .asset-card:not(.unset) { color: #10201a; } }
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .card {
   background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);

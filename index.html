@@ -26,6 +26,12 @@
   <main>
     <!-- ホーム -->
     <section class="view active" id="view-home">
+      <button class="asset-card" id="assetCard" type="button">
+        <span class="label" id="assetLabel">現在の残高</span>
+        <span class="asset-value" id="assetValue">—</span>
+        <span class="asset-sub" id="assetSub"></span>
+      </button>
+
       <div class="cards">
         <div class="card"><span class="label">収入</span><span class="value income" id="sumIncome">¥0</span></div>
         <div class="card"><span class="label">支出</span><span class="value expense" id="sumExpense">¥0</span></div>
@@ -71,6 +77,16 @@
         <h2>帳簿の名前</h2>
         <div id="bookNames" class="stack"></div>
         <p class="hint">入力欄をタップして名前を変えられます。以下の設定は、いま開いている帳簿（<b class="cur-book"></b>）のものです。</p>
+      </div>
+
+      <div class="panel" id="assetPanel">
+        <h2>「<span class="cur-book"></span>」の残高</h2>
+        <div class="row">
+          <input type="text" inputmode="numeric" id="assetInput" placeholder="いまの残高 例：500000">
+          <button class="btn" id="saveAsset">設定</button>
+        </div>
+        <p class="hint">口座やお財布の<b>いまの残高</b>を入れてください。これ以降に記録した収入・支出が自動で足し引きされます。ずれてきたら、いつでも入れ直せばOKです。</p>
+        <p class="hint" id="assetSetInfo"></p>
       </div>
 
       <div class="panel">

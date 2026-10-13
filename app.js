@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 /* ========== IndexedDB（データはこの端末の中に保存） ========== */
 const DB_NAME = 'kakeibo';
@@ -61,6 +61,7 @@ const state = {
   book: 'household',          // いま表示している帳簿
   catsByBook: {},             // { bookId: { expense: [...], income: [...] } }
   budgetByBook: {},           // { bookId: 金額 }
+  openingByBook: {},          // { bookId: { amount, date, setAt } } 残高を設定した時点の金額
   formBook: 'household',
   ym: ymOf(new Date()),
   filter: 'all',
@@ -72,6 +73,26 @@ const state = {
 const curCats = () => (state.catsByBook[state.book] ||= structuredClone(DEFAULT_CATS));
 const catsOf = b => (state.catsByBook[b] ||= structuredClone(DEFAULT_CATS));
 const curBudget = () => state.budgetByBook[state.book] || 0;
+
+/* ========== 残高 ==========
+   設定した時点の残高 ＋ それ以降に記録された収入 − 支出。
+   ・設定日より前の日付の記録 → すでに残高に含まれているので数えない
+   ・設定日と同じ日付の記録 → 設定より後に入力したものだけ数える */
+function afterOpening(e, op) {
+  return e.date > op.date || (e.date === op.date && e.createdAt > op.setAt);
+}
+function balanceAt(bookId, untilDate) {
+  const op = state.openingByBook[bookId];
+  if (!op) return null;
+  if (untilDate < op.date) return undefined; // 設定前の期間
+  return state.entries.reduce((sum, e) =>
+    e.book === bookId && e.date <= untilDate && afterOpening(e, op)
+      ? sum + (e.type === 'income' ? e.amount : -e.amount) : sum, op.amount);
+}
+function monthEnd(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return ym + '-' + String(new Date(y, m, 0).getDate()).padStart(2, '0');
+}
 const bookName = id => (state.books.find(b => b.id === id) || {}).name || id;
 
 /* ========== ユーティリティ ========== */
@@ -110,6 +131,7 @@ function render() {
   document.body.dataset.book = state.book;
   renderBookSwitch();
   const list = monthEntries();
+  renderAsset();
   renderSummary(list);
   renderDonut(list);
   renderRecent(list);
@@ -127,6 +149,37 @@ async function switchBook(id) {
   render();
   if ($('#view-settings').classList.contains('active')) renderSettings();
 }
+
+function renderAsset() {
+  const card = $('#assetCard');
+  const op = state.openingByBook[state.book];
+  if (!op) {
+    card.classList.add('unset');
+    $('#assetLabel').textContent = '残高';
+    $('#assetValue').textContent = '＋ いまの残高を設定する';
+    $('#assetSub').textContent = '設定すると、記録に合わせて残高が自動で増減します';
+    return;
+  }
+  card.classList.remove('unset');
+  const isCur = state.ym === ymOf(new Date());
+  const until = isCur ? '9999-12-31' : monthEnd(state.ym);
+  const bal = balanceAt(state.book, until);
+  const m = Number(state.ym.slice(5));
+  $('#assetLabel').textContent = isCur ? '現在の残高' : `${m}月末の残高`;
+  if (bal === undefined) {
+    $('#assetValue').textContent = '—';
+    $('#assetSub').textContent = `残高を設定したのは ${fmtDate(op.date)} です`;
+    return;
+  }
+  $('#assetValue').textContent = yen(bal);
+  // 先月末からの増減
+  const prevEnd = monthEnd(shiftYm(state.ym, -1));
+  const prev = balanceAt(state.book, prevEnd);
+  $('#assetSub').textContent = (prev === undefined || prev === null)
+    ? `${fmtDate(op.date)} に ${yen(op.amount)} で設定`
+    : `先月末から ${bal - prev >= 0 ? '+' : ''}${yen(bal - prev)}`;
+}
+function fmtDate(d) { const [y, m, dd] = d.split('-'); return `${y}/${Number(m)}/${Number(dd)}`; }
 
 function renderSummary(list) {
   const inc = list.filter(e => e.type === 'income').reduce((a, e) => a + e.amount, 0);
@@ -231,6 +284,11 @@ function renderSettings() {
   const name = bookName(state.book);
   document.querySelectorAll('.cur-book').forEach(el => (el.textContent = name));
   $('#budgetInput').value = curBudget() || '';
+  const op = state.openingByBook[state.book];
+  $('#assetInput').value = '';
+  $('#assetSetInfo').textContent = op
+    ? `現在の設定：${fmtDate(op.date)} 時点で ${yen(op.amount)}（いまの計算上の残高 ${yen(balanceAt(state.book, '9999-12-31'))}）`
+    : 'まだ設定されていません。';
   $('#bookNames').innerHTML = state.books.map(b =>
     `<label class="book-name"><span class="swatch" data-book="${b.id}"></span>
       <input type="text" maxlength="8" value="${esc(b.name)}" data-rename="${b.id}"></label>`).join('');
@@ -307,10 +365,13 @@ async function saveEntry(ev) {
 
 /* ========== CSV ========== */
 function toCsv() {
-  const head = ['日付', '種別', 'カテゴリ', '金額', 'メモ', '帳簿'];
+  const head = ['日付', '種別', 'カテゴリ', '金額', 'メモ', '帳簿', '記録日時'];
   const q = v => /[",\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
   const rows = [...state.entries].sort((a, b) => a.date.localeCompare(b.date))
-    .map(e => [e.date, e.type === 'income' ? '収入' : '支出', e.category, e.amount, e.memo || '', bookName(e.book)].map(q).join(','));
+    .map(e => [e.date, e.type === 'income' ? '収入' : '支出', e.category, e.amount, e.memo || '', bookName(e.book), new Date(e.createdAt || 0).toISOString()].map(q).join(','));
+  // 残高の設定もバックアップに入れる（メモ欄に設定した瞬間を記録）
+  Object.entries(state.openingByBook).forEach(([bk, op]) =>
+    rows.push([op.date, '残高設定', '', op.amount, new Date(op.setAt).toISOString(), bookName(bk)].map(q).join(',')));
   return '﻿' + [head.join(','), ...rows].join('\r\n');
 }
 function parseCsv(text) {
@@ -336,7 +397,18 @@ async function importCsv(file) {
   const rows = parseCsv(await file.text());
   if (rows.length && rows[0][0] === '日付') rows.shift();
   const list = [];
-  for (const [date, type, category, amount, memo, bookCol] of rows) {
+  let openings = 0;
+  for (const [date, type, category, amount, memo, bookCol, createdCol] of rows) {
+    if (type === '残高設定') {
+      const b = state.books.find(x => x.name === String(bookCol || '').trim());
+      const setAt = Date.parse(memo);
+      const amt = parseInt(String(amount).replace(/[^\d-]/g, ''), 10);
+      if (b && !isNaN(amt) && !isNaN(setAt)) {
+        state.openingByBook[b.id] = { amount: amt, date: String(date).trim(), setAt };
+        openings++;
+      }
+      continue;
+    }
     const amt = parseInt(String(amount).replace(/[^\d]/g, ''), 10);
     const d = String(date).trim().replace(/\//g, '-').replace(/-(\d)(?=-|$)/g, '-0$1');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !amt) continue;
@@ -346,9 +418,15 @@ async function importCsv(file) {
     const cat = (category || 'その他').trim();
     const cats = catsOf(bk);
     if (!cats[t].includes(cat)) cats[t].push(cat);
-    list.push({ id: uid(), createdAt: Date.now(), book: bk, date: d, type: t, category: cat, amount: amt, memo: (memo || '').trim() });
+    const ca = Date.parse(createdCol);
+    list.push({ id: uid(), createdAt: isNaN(ca) ? Date.now() : ca, book: bk, date: d, type: t, category: cat, amount: amt, memo: (memo || '').trim() });
   }
-  if (!list.length) { toast('読み込める行がありませんでした'); return; }
+  if (openings) await db.setMeta('openingByBook', state.openingByBook);
+  if (!list.length) {
+    if (openings) { render(); renderSettings(); toast('残高の設定を読み込みました'); }
+    else toast('読み込める行がありませんでした');
+    return;
+  }
   // 同じ内容の記録は重複させない
   const key = e => [e.book, e.date, e.type, e.category, e.amount, e.memo].join('|');
   const have = new Set(state.entries.map(key));
@@ -414,6 +492,27 @@ function bind() {
     renderHistory(monthEntries());
   }));
 
+  $('#assetCard').onclick = () => {
+    go('settings');
+    setTimeout(() => { $('#assetPanel').scrollIntoView({ block: 'center' }); $('#assetInput').focus(); }, 50);
+  };
+  $('#assetInput').oninput = e => {
+    const neg = e.target.value.trim().startsWith('-') || e.target.value.trim().startsWith('−');
+    const n = e.target.value.replace(/[^\d]/g, '');
+    e.target.value = n ? (neg ? '-' : '') + Number(n).toLocaleString('ja-JP') : (neg ? '-' : '');
+  };
+  $('#saveAsset').onclick = async () => {
+    const raw = $('#assetInput').value.trim();
+    if (!raw) { toast('残高を入力してください'); return; }
+    const amt = parseInt(raw.replace(/[^\d-]/g, ''), 10);
+    if (isNaN(amt)) { toast('数字で入力してください'); return; }
+    const had = !!state.openingByBook[state.book];
+    if (had && !confirm(`「${bookName(state.book)}」の残高を ${yen(amt)} に設定し直しますか？`)) return;
+    state.openingByBook[state.book] = { amount: amt, date: todayStr(), setAt: Date.now() };
+    await db.setMeta('openingByBook', state.openingByBook);
+    render(); renderSettings();
+    toast(had ? '残高を設定し直しました' : '残高を設定しました');
+  };
   $('#saveBudget').onclick = async () => {
     state.budgetByBook[state.book] = Math.max(0, parseInt($('#budgetInput').value, 10) || 0);
     await db.setMeta('budgetByBook', state.budgetByBook);
@@ -476,10 +575,12 @@ function bind() {
 async function init() {
   bind();
   try {
-    const [entries, books, current, catsByBook, budgetByBook, oldCats, oldBudget] = await Promise.all([
+    const [entries, books, current, catsByBook, budgetByBook, oldCats, oldBudget, openingByBook] = await Promise.all([
       db.all(), db.getMeta('books'), db.getMeta('currentBook'),
       db.getMeta('catsByBook'), db.getMeta('budgetByBook'), db.getMeta('cats'), db.getMeta('budget'),
+      db.getMeta('openingByBook'),
     ]);
+    state.openingByBook = openingByBook || {};
     if (books) state.books = books;
     state.catsByBook = catsByBook || {};
     state.budgetByBook = budgetByBook || {};
