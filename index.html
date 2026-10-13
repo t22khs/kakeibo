@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>家計簿</title>
+  <meta name="theme-color" content="#2f6f5e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="家計簿">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="book-switch" id="bookSwitch" role="tablist" aria-label="帳簿"></div>
+    <div class="month-row">
+      <button class="icon-btn" id="prevMonth" aria-label="前の月">‹</button>
+      <h1 id="monthLabel">----年--月</h1>
+      <button class="icon-btn" id="nextMonth" aria-label="次の月">›</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ホーム -->
+    <section class="view active" id="view-home">
+      <div class="cards">
+        <div class="card"><span class="label">収入</span><span class="value income" id="sumIncome">¥0</span></div>
+        <div class="card"><span class="label">支出</span><span class="value expense" id="sumExpense">¥0</span></div>
+        <div class="card wide"><span class="label">収支</span><span class="value" id="sumBalance">¥0</span></div>
+      </div>
+
+      <div class="panel" id="budgetPanel">
+        <div class="panel-head">
+          <h2>今月の予算</h2>
+          <span class="muted" id="budgetText"></span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="budgetBar"></div></div>
+        <p class="hint" id="budgetHint"></p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>カテゴリ別の支出</h2></div>
+        <div class="chart-wrap">
+          <svg id="donut" viewBox="0 0 120 120" aria-label="カテゴリ別支出のグラフ"></svg>
+          <ul class="legend" id="legend"></ul>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>最近の記録</h2><button class="link" data-goto="history">すべて見る</button></div>
+        <ul class="entries" id="recentList"></ul>
+      </div>
+    </section>
+
+    <!-- 履歴 -->
+    <section class="view" id="view-history">
+      <div class="filter">
+        <button class="chip active" data-filter="all">すべて</button>
+        <button class="chip" data-filter="expense">支出</button>
+        <button class="chip" data-filter="income">収入</button>
+      </div>
+      <div id="historyList"></div>
+    </section>
+
+    <!-- 設定 -->
+    <section class="view" id="view-settings">
+      <div class="panel">
+        <h2>帳簿の名前</h2>
+        <div id="bookNames" class="stack"></div>
+        <p class="hint">入力欄をタップして名前を変えられます。以下の設定は、いま開いている帳簿（<b class="cur-book"></b>）のものです。</p>
+      </div>
+
+      <div class="panel">
+        <h2>「<span class="cur-book"></span>」の毎月の予算（支出）</h2>
+        <div class="row">
+          <input type="number" inputmode="numeric" id="budgetInput" placeholder="例：150000" min="0">
+          <button class="btn" id="saveBudget">保存</button>
+        </div>
+        <p class="hint">0 または空欄で予算表示をオフにします。</p>
+      </div>
+
+      <div class="panel">
+        <h2>バックアップ</h2>
+        <p class="hint">データはこの端末の中だけに保存されています。機種変更に備えて、ときどき書き出してください。書き出しには全帳簿の記録が入ります。</p>
+        <div class="stack">
+          <button class="btn" id="exportCsv">CSVで書き出す</button>
+          <label class="btn ghost">CSVを読み込む<input type="file" id="importCsv" accept=".csv,text/csv" hidden></label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>「<span class="cur-book"></span>」のカテゴリ</h2>
+        <p class="hint">支出</p>
+        <div class="tags" id="catExpense"></div>
+        <p class="hint">収入</p>
+        <div class="tags" id="catIncome"></div>
+        <div class="row">
+          <select id="newCatType"><option value="expense">支出</option><option value="income">収入</option></select>
+          <input type="text" id="newCatName" placeholder="カテゴリ名" maxlength="12">
+          <button class="btn" id="addCat">追加</button>
+        </div>
+      </div>
+
+      <div class="panel danger">
+        <h2>データの削除</h2>
+        <button class="btn warn" id="wipe">「<span class="cur-book"></span>」の記録をすべて削除</button>
+      </div>
+      <p class="hint center" id="statusLine"></p>
+    </section>
+  </main>
+
+  <button class="fab" id="fab" aria-label="記録を追加">＋</button>
+
+  <nav class="tabbar">
+    <button class="tab active" data-goto="home"><span>🏠</span>ホーム</button>
+    <button class="tab" data-goto="history"><span>📒</span>履歴</button>
+    <button class="tab" data-goto="settings"><span>⚙️</span>設定</button>
+  </nav>
+
+  <!-- 入力シート -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <form class="sheet" id="entryForm" hidden autocomplete="off">
+    <div class="sheet-handle"></div>
+    <div class="form-book" id="formBook" aria-label="記録する帳簿"></div>
+    <div class="seg">
+      <button type="button" class="seg-btn active" data-type="expense">支出</button>
+      <button type="button" class="seg-btn" data-type="income">収入</button>
+    </div>
+    <label class="amount">
+      <span>¥</span>
+      <input type="text" inputmode="numeric" id="amount" placeholder="0" required>
+    </label>
+    <div class="tags pick" id="catPick"></div>
+    <div class="row">
+      <input type="date" id="date" required>
+      <input type="text" id="memo" placeholder="メモ（任意）" maxlength="40">
+    </div>
+    <div class="row">
+      <button type="button" class="btn warn ghost" id="deleteEntry" hidden>削除</button>
+      <button type="button" class="btn ghost" id="cancelEntry">閉じる</button>
+      <button type="submit" class="btn primary">保存</button>
+    </div>
+  </form>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
