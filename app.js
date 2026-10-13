@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 
 /* ========== IndexedDB（データはこの端末の中に保存） ========== */
 const DB_NAME = 'kakeibo';
@@ -68,7 +68,8 @@ const state = {
   formAccount: null,
   formToAccount: null,
   formBook: 'household',
-  ym: ymOf(new Date()),
+  ym: ymOf(new Date()),       // 表示中の期間（期間が始まる月）
+  startDayByBook: {},         // { bookId: 1〜28 } 1か月の始まりの日
   filter: 'all',
   editing: null,
   formType: 'expense',
@@ -119,6 +120,23 @@ function totalAt(bookId, untilDate) {
   const known = vals.filter(v => typeof v === 'number');
   return known.length ? known.reduce((a, b) => a + b, 0) : undefined;
 }
+/* ========== 1か月の区切り ==========
+   開始日 S のとき、期間 ym は「ym の S日 〜 翌月の S-1日」。S=1 ならふつうの月。 */
+const startDay = (b = state.book) => state.startDayByBook[b] || 1;
+const pad2 = n => String(n).padStart(2, '0');
+const ds = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function periodRange(ym, b) {
+  const S = startDay(b);
+  const [y, m] = ym.split('-').map(Number);
+  return { start: ds(new Date(y, m - 1, S)), end: ds(new Date(y, m, S - 1)) };
+}
+function periodOf(dateStr, b) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const ym = `${y}-${pad2(m)}`;
+  return d >= startDay(b) ? ym : shiftYm(ym, -1);
+}
+const curPeriod = b => periodOf(todayStr(), b);
+const md = d => `${Number(d.slice(5, 7))}/${Number(d.slice(8))}`;
 function monthEnd(ym) {
   const [y, m] = ym.split('-').map(Number);
   return ym + '-' + String(new Date(y, m, 0).getDate()).padStart(2, '0');
@@ -151,13 +169,18 @@ function toast(msg) {
 
 /* ========== 描画 ========== */
 function monthEntries() {
-  return state.entries.filter(e => e.book === state.book && e.date.startsWith(state.ym))
+  const { start, end } = periodRange(state.ym);
+  return state.entries.filter(e => e.book === state.book && e.date >= start && e.date <= end)
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 }
 
 function render() {
   const [y, m] = state.ym.split('-');
-  $('#monthLabel').textContent = `${y}年${Number(m)}月`;
+  const { start, end } = periodRange(state.ym);
+  const custom = startDay() > 1;
+  $('#monthLabel').textContent = custom ? `${md(start)} 〜 ${md(end)}` : `${y}年${Number(m)}月`;
+  $('#periodRange').hidden = !custom;
+  $('#periodRange').textContent = custom ? (start.slice(0, 4) === end.slice(0, 4) ? `${y}年` : `${start.slice(0, 4)}〜${end.slice(0, 4)}年`) : '';
   document.body.dataset.book = state.book;
   renderBookSwitch();
   const list = monthEntries();
@@ -174,7 +197,9 @@ function renderBookSwitch() {
     `<button class="book-btn ${b.id === state.book ? 'active' : ''}" data-book="${b.id}">${esc(b.name)}</button>`).join('');
 }
 async function switchBook(id) {
+  const wasCur = state.ym === curPeriod();
   state.book = id;
+  if (wasCur) state.ym = curPeriod();
   db.setMeta('currentBook', id);
   render();
   if ($('#view-settings').classList.contains('active')) renderSettings();
@@ -196,23 +221,21 @@ function renderAsset() {
   }
   card.classList.remove('unset');
   $('#assetSub').hidden = false;
-  const isCur = state.ym === ymOf(new Date());
-  const until = isCur ? '9999-12-31' : monthEnd(state.ym);
+  const isCur = state.ym === curPeriod();
+  const until = isCur ? '9999-12-31' : periodRange(state.ym).end;
   const bal = balanceAt(state.book, until);
-  const m = Number(state.ym.slice(5));
-  $('#assetLabel').textContent = isCur ? '現在の残高' : `${m}月末の残高`;
+  $('#assetLabel').textContent = isCur ? '現在の残高' : `${endLabel(until)}の残高`;
   if (bal === undefined) {
     $('#assetValue').textContent = '—';
     $('#assetSub').textContent = `残高を設定したのは ${fmtDate(op.date)} です`;
     return;
   }
   $('#assetValue').textContent = yen(bal);
-  // 先月末からの増減
-  const prevEnd = monthEnd(shiftYm(state.ym, -1));
-  const prev = balanceAt(state.book, prevEnd);
+  // 前の期間の終わりからの増減
+  const prev = balanceAt(state.book, periodRange(shiftYm(state.ym, -1)).end);
   $('#assetSub').textContent = (prev === undefined || prev === null)
     ? `${fmtDate(op.date)} に ${yen(op.amount)} で設定`
-    : `先月末から ${bal - prev >= 0 ? '+' : ''}${yen(bal - prev)}`;
+    : `${prevLabel()}から ${bal - prev >= 0 ? '+' : ''}${yen(bal - prev)}`;
 }
 function renderAcctAsset(accts) {
   const card = $('#assetCard');
@@ -224,15 +247,14 @@ function renderAcctAsset(accts) {
     return;
   }
   card.classList.remove('unset');
-  const isCur = state.ym === ymOf(new Date());
-  const until = isCur ? '9999-12-31' : monthEnd(state.ym);
-  const m = Number(state.ym.slice(5));
-  $('#assetLabel').textContent = isCur ? '現在の残高（合計）' : `${m}月末の残高（合計）`;
+  const isCur = state.ym === curPeriod();
+  const until = isCur ? '9999-12-31' : periodRange(state.ym).end;
+  $('#assetLabel').textContent = isCur ? '現在の残高（合計）' : `${endLabel(until)}の残高（合計）`;
   const total = totalAt(state.book, until);
   $('#assetValue').textContent = typeof total === 'number' ? yen(total) : '—';
-  const prev = totalAt(state.book, monthEnd(shiftYm(state.ym, -1)));
+  const prev = totalAt(state.book, periodRange(shiftYm(state.ym, -1)).end);
   $('#assetSub').textContent = typeof total === 'number' && typeof prev === 'number'
-    ? `先月末から ${total - prev >= 0 ? '+' : ''}${yen(total - prev)}` : '';
+    ? `${prevLabel()}から ${total - prev >= 0 ? '+' : ''}${yen(total - prev)}` : '';
   $('#assetSub').hidden = !$('#assetSub').textContent;
   const list = $('#acctList');
   list.hidden = false;
@@ -242,6 +264,8 @@ function renderAcctAsset(accts) {
     return `<li><span>${esc(a.name)}</span><span>${txt}</span></li>`;
   }).join('');
 }
+const endLabel = d => startDay() > 1 ? md(d) : `${Number(d.slice(5, 7))}月末`;
+const prevLabel = () => startDay() > 1 ? '前の期間の終わり' : '先月末';
 function fmtDate(d) { const [y, m, dd] = d.split('-'); return `${y}/${Number(m)}/${Number(dd)}`; }
 
 function renderSummary(list) {
@@ -267,10 +291,10 @@ function renderSummary(list) {
   let hint;
   if (rest < 0) hint = `予算を ${yen(-rest)} オーバーしています`;
   else {
-    const now = new Date();
-    if (state.ym === ymOf(now)) {
-      const last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      const daysLeft = last - now.getDate() + 1;
+    if (state.ym === curPeriod()) {
+      const end = new Date(periodRange(state.ym).end + 'T00:00:00');
+      const today = new Date(todayStr() + 'T00:00:00');
+      const daysLeft = Math.round((end - today) / 86400000) + 1;
       hint = `残り ${yen(rest)}（あと${daysLeft}日・1日あたり ${yen(rest / daysLeft)}）`;
     } else hint = `残り ${yen(rest)}`;
   }
@@ -352,6 +376,10 @@ function renderSettings() {
   const name = bookName(state.book);
   document.querySelectorAll('.cur-book').forEach(el => (el.textContent = name));
   $('#budgetInput').value = curBudget() || '';
+  const S = startDay();
+  $('#startDay').innerHTML = Array.from({ length: 28 }, (_, i) => i + 1)
+    .map(d => `<option value="${d}" ${d === S ? 'selected' : ''}>${d}</option>`).join('');
+  $('#startDayEnd').textContent = S === 1 ? '末日' : `${S - 1}日`;
   const accts = acctsOf(state.book);
   $('#assetPanel').hidden = accts.length > 0;
   $('#acctEditor').innerHTML = accts.map(a => {
@@ -404,7 +432,7 @@ function openSheet(entry) {
   state.formAccount = entry ? entry.account : null;
   state.formToAccount = entry ? entry.toAccount : null;
   $('#amount').value = entry ? entry.amount.toLocaleString('ja-JP') : '';
-  $('#date').value = entry ? entry.date : (state.ym === ymOf(new Date()) ? todayStr() : state.ym + '-01');
+  $('#date').value = entry ? entry.date : (state.ym === curPeriod() ? todayStr() : periodRange(state.ym).start);
   $('#memo').value = entry ? entry.memo || '' : '';
   $('#deleteEntry').hidden = !entry;
   syncSheet();
@@ -476,9 +504,9 @@ async function saveEntry(ev) {
   await db.put(e);
   const i = state.entries.findIndex(x => x.id === e.id);
   if (i >= 0) state.entries[i] = e; else state.entries.push(e);
-  if (!e.date.startsWith(state.ym)) state.ym = e.date.slice(0, 7);
+  if (e.book === state.book) state.ym = periodOf(e.date);
   closeSheet();
-  if (e.book !== state.book) { await switchBook(e.book); } else render();
+  if (e.book !== state.book) { await switchBook(e.book); state.ym = periodOf(e.date); render(); } else render();
   toast((isEdit ? '更新しました' : '記録しました') + (state.books.length > 1 ? `（${bookName(e.book)}）` : ''));
 }
 
@@ -720,6 +748,14 @@ function bind() {
     render(); renderSettings();
     toast(had ? '残高を設定し直しました' : '残高を設定しました');
   };
+  $('#startDay').onchange = async e => {
+    const wasCur = state.ym === curPeriod();
+    state.startDayByBook[state.book] = Number(e.target.value);
+    await db.setMeta('startDayByBook', state.startDayByBook);
+    if (wasCur) state.ym = curPeriod();
+    render(); renderSettings();
+    toast(Number(e.target.value) === 1 ? '1日始まりにしました' : `${e.target.value}日始まりにしました`);
+  };
   $('#saveBudget').onclick = async () => {
     state.budgetByBook[state.book] = Math.max(0, parseInt($('#budgetInput').value, 10) || 0);
     await db.setMeta('budgetByBook', state.budgetByBook);
@@ -793,6 +829,7 @@ async function init() {
     state.accountsByBook = accountsByBook || {};
     state.openingByAccount = openingByAccount || {};
     state.lastAcct = lastAcct || {};
+    state.startDayByBook = (await db.getMeta('startDayByBook')) || {};
     if (books) state.books = books;
     state.catsByBook = catsByBook || {};
     state.budgetByBook = budgetByBook || {};
@@ -804,6 +841,7 @@ async function init() {
     if (!budgetByBook && oldBudget) { state.budgetByBook.household = oldBudget; await db.setMeta('budgetByBook', state.budgetByBook); }
     state.entries = entries || [];
     if (current && state.books.some(b => b.id === current)) state.book = current;
+    state.ym = curPeriod();
     // ブラウザに「データを消さないで」と頼む（対応ブラウザのみ）
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (err) {

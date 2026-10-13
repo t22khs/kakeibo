@@ -61,6 +61,10 @@ h2 { font-size: 15px; }
 }
 .topbar > * { max-width: 528px; margin-left: auto; margin-right: auto; }
 .month-row { display: flex; align-items: center; justify-content: space-between; }
+.month-title { display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
+#periodRange { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.start-day-row { align-items: center; flex-wrap: wrap; font-size: 14px; }
+.start-day-row select { min-width: 72px; }
 .book-switch {
   display: flex; background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; padding: 3px; margin-bottom: 10px;

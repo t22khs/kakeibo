@@ -18,7 +18,7 @@
     <div class="book-switch" id="bookSwitch" role="tablist" aria-label="帳簿"></div>
     <div class="month-row">
       <button class="icon-btn" id="prevMonth" aria-label="前の月">‹</button>
-      <h1 id="monthLabel">----年--月</h1>
+      <div class="month-title"><h1 id="monthLabel">----年--月</h1><span id="periodRange" hidden></span></div>
       <button class="icon-btn" id="nextMonth" aria-label="次の月">›</button>
     </div>
   </header>
@@ -98,6 +98,16 @@
         </div>
         <p class="hint">口座やお財布の<b>いまの残高</b>を入れてください。これ以降に記録した収入・支出が自動で足し引きされます。ずれてきたら、いつでも入れ直せばOKです。</p>
         <p class="hint" id="assetSetInfo"></p>
+      </div>
+
+      <div class="panel">
+        <h2>「<span class="cur-book"></span>」の1か月の区切り</h2>
+        <div class="row start-day-row">
+          <span>毎月</span>
+          <select id="startDay"></select>
+          <span>日から翌月<span id="startDayEnd">末日</span>までを1か月にする</span>
+        </div>
+        <p class="hint">給料日に合わせるときに使います。集計・グラフ・予算・残高がこの区切りで計算されます。</p>
       </div>
 
       <div class="panel">
