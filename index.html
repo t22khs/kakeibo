@@ -30,6 +30,7 @@
         <span class="label" id="assetLabel">現在の残高</span>
         <span class="asset-value" id="assetValue">—</span>
         <span class="asset-sub" id="assetSub"></span>
+        <ul class="acct-list" id="acctList" hidden></ul>
       </button>
 
       <div class="cards">
@@ -77,6 +78,16 @@
         <h2>帳簿の名前</h2>
         <div id="bookNames" class="stack"></div>
         <p class="hint">入力欄をタップして名前を変えられます。以下の設定は、いま開いている帳簿（<b class="cur-book"></b>）のものです。</p>
+      </div>
+
+      <div class="panel" id="acctPanel">
+        <h2>「<span class="cur-book"></span>」のお金の置き場所</h2>
+        <p class="hint">銀行口座・封筒など、残高を分けて管理したい場所を登録します。登録すると、記録のたびにどこから払ったか（どこに入ったか）を選べるようになり、場所ごとの残高が出ます。</p>
+        <div id="acctEditor" class="stack"></div>
+        <div class="row">
+          <input type="text" id="newAcctName" placeholder="例：三井住友" maxlength="10">
+          <button class="btn" id="addAcct">追加</button>
+        </div>
       </div>
 
       <div class="panel" id="assetPanel">
@@ -144,11 +155,20 @@
     <div class="seg">
       <button type="button" class="seg-btn active" data-type="expense">支出</button>
       <button type="button" class="seg-btn" data-type="income">収入</button>
+      <button type="button" class="seg-btn" data-type="transfer" id="segTransfer">振替</button>
     </div>
     <label class="amount">
       <span>¥</span>
       <input type="text" inputmode="numeric" id="amount" placeholder="0" required>
     </label>
+    <div class="acct-pick" id="acctPick" hidden>
+      <span class="acct-pick-label" id="acctFromLabel">支払い元</span>
+      <div class="tags" id="acctFrom"></div>
+      <div id="acctToWrap" hidden>
+        <span class="acct-pick-label">移す先</span>
+        <div class="tags" id="acctTo"></div>
+      </div>
+    </div>
     <div class="tags pick" id="catPick"></div>
     <div class="row">
       <input type="date" id="date" required>

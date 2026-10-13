@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 /* ========== IndexedDB（データはこの端末の中に保存） ========== */
 const DB_NAME = 'kakeibo';
@@ -62,6 +62,11 @@ const state = {
   catsByBook: {},             // { bookId: { expense: [...], income: [...] } }
   budgetByBook: {},           // { bookId: 金額 }
   openingByBook: {},          // { bookId: { amount, date, setAt } } 残高を設定した時点の金額
+  accountsByBook: {},         // { bookId: [{ id, name }] } お金の置き場所（口座・封筒など）
+  openingByAccount: {},       // { accountId: { amount, date, setAt } }
+  lastAcct: {},               // { bookId: accountId } 前回選んだ置き場所
+  formAccount: null,
+  formToAccount: null,
   formBook: 'household',
   ym: ymOf(new Date()),
   filter: 'all',
@@ -86,8 +91,33 @@ function balanceAt(bookId, untilDate) {
   if (!op) return null;
   if (untilDate < op.date) return undefined; // 設定前の期間
   return state.entries.reduce((sum, e) =>
-    e.book === bookId && e.date <= untilDate && afterOpening(e, op)
+    e.book === bookId && e.type !== 'transfer' && e.date <= untilDate && afterOpening(e, op)
       ? sum + (e.type === 'income' ? e.amount : -e.amount) : sum, op.amount);
+}
+
+/* 置き場所（口座・封筒）ごとの残高 */
+const acctsOf = b => state.accountsByBook[b] || [];
+const acctName = (b, id) => (acctsOf(b).find(a => a.id === id) || {}).name || '';
+function acctDelta(e, accId) {
+  if (e.type === 'transfer') return (e.toAccount === accId ? e.amount : 0) - (e.account === accId ? e.amount : 0);
+  if (e.account !== accId) return 0;
+  return e.type === 'income' ? e.amount : -e.amount;
+}
+function acctBalanceAt(bookId, accId, untilDate) {
+  const op = state.openingByAccount[accId];
+  if (!op) return null;
+  if (untilDate < op.date) return undefined;
+  return state.entries.reduce((sum, e) =>
+    e.book === bookId && e.date <= untilDate && afterOpening(e, op) ? sum + acctDelta(e, accId) : sum, op.amount);
+}
+// 帳簿の残高：置き場所があればその合計、なければ帳簿全体の残高
+function totalAt(bookId, untilDate) {
+  const accts = acctsOf(bookId);
+  if (!accts.length) return balanceAt(bookId, untilDate);
+  const vals = accts.map(a => acctBalanceAt(bookId, a.id, untilDate));
+  if (vals.every(v => v === null)) return null;
+  const known = vals.filter(v => typeof v === 'number');
+  return known.length ? known.reduce((a, b) => a + b, 0) : undefined;
 }
 function monthEnd(ym) {
   const [y, m] = ym.split('-').map(Number);
@@ -151,16 +181,21 @@ async function switchBook(id) {
 }
 
 function renderAsset() {
+  const accts = acctsOf(state.book);
+  $('#acctList').hidden = true;
+  if (accts.length) return renderAcctAsset(accts);
   const card = $('#assetCard');
   const op = state.openingByBook[state.book];
   if (!op) {
     card.classList.add('unset');
+    $('#assetSub').hidden = false;
     $('#assetLabel').textContent = '残高';
     $('#assetValue').textContent = '＋ いまの残高を設定する';
     $('#assetSub').textContent = '設定すると、記録に合わせて残高が自動で増減します';
     return;
   }
   card.classList.remove('unset');
+  $('#assetSub').hidden = false;
   const isCur = state.ym === ymOf(new Date());
   const until = isCur ? '9999-12-31' : monthEnd(state.ym);
   const bal = balanceAt(state.book, until);
@@ -178,6 +213,34 @@ function renderAsset() {
   $('#assetSub').textContent = (prev === undefined || prev === null)
     ? `${fmtDate(op.date)} に ${yen(op.amount)} で設定`
     : `先月末から ${bal - prev >= 0 ? '+' : ''}${yen(bal - prev)}`;
+}
+function renderAcctAsset(accts) {
+  const card = $('#assetCard');
+  if (accts.every(a => !state.openingByAccount[a.id])) {
+    card.classList.add('unset');
+    $('#assetLabel').textContent = '残高';
+    $('#assetValue').textContent = '＋ 置き場所ごとの残高を設定する';
+    $('#assetSub').textContent = accts.map(a => a.name).join('・');
+    return;
+  }
+  card.classList.remove('unset');
+  const isCur = state.ym === ymOf(new Date());
+  const until = isCur ? '9999-12-31' : monthEnd(state.ym);
+  const m = Number(state.ym.slice(5));
+  $('#assetLabel').textContent = isCur ? '現在の残高（合計）' : `${m}月末の残高（合計）`;
+  const total = totalAt(state.book, until);
+  $('#assetValue').textContent = typeof total === 'number' ? yen(total) : '—';
+  const prev = totalAt(state.book, monthEnd(shiftYm(state.ym, -1)));
+  $('#assetSub').textContent = typeof total === 'number' && typeof prev === 'number'
+    ? `先月末から ${total - prev >= 0 ? '+' : ''}${yen(total - prev)}` : '';
+  $('#assetSub').hidden = !$('#assetSub').textContent;
+  const list = $('#acctList');
+  list.hidden = false;
+  list.innerHTML = accts.map(a => {
+    const v = acctBalanceAt(state.book, a.id, until);
+    const txt = v === null ? '<span class="unset-amt">未設定</span>' : v === undefined ? '<span class="unset-amt">—</span>' : yen(v);
+    return `<li><span>${esc(a.name)}</span><span>${txt}</span></li>`;
+  }).join('');
 }
 function fmtDate(d) { const [y, m, dd] = d.split('-'); return `${y}/${Number(m)}/${Number(dd)}`; }
 
@@ -250,11 +313,16 @@ function colorFor(cat, i) {
 
 function entryRow(e, showDate) {
   const [, m, d] = e.date.split('-');
-  const sign = e.type === 'income' ? '+' : '-';
+  const isTr = e.type === 'transfer';
+  const sign = isTr ? '' : e.type === 'income' ? '+' : '-';
+  const where = isTr
+    ? `${acctName(e.book, e.account) || '?'} → ${acctName(e.book, e.toAccount) || '?'}`
+    : acctName(e.book, e.account);
+  const memo = [where, e.memo].filter(Boolean).join(' · ');
   return `<li class="entry" data-id="${e.id}">
     ${showDate ? `<span class="d">${Number(m)}/${Number(d)}</span>` : ''}
-    <span class="cat">${esc(e.category)}</span>
-    <span class="memo">${esc(e.memo || '')}</span>
+    <span class="cat">${esc(isTr ? '振替' : e.category)}</span>
+    <span class="memo">${esc(memo)}</span>
     <span class="amt ${e.type}">${sign}${yen(e.amount)}</span>
   </li>`;
 }
@@ -274,7 +342,7 @@ function renderHistory(list) {
   el.innerHTML = Object.keys(groups).sort().reverse().map(date => {
     const items = groups[date];
     const d = new Date(date + 'T00:00:00');
-    const net = items.reduce((a, e) => a + (e.type === 'income' ? e.amount : -e.amount), 0);
+    const net = items.reduce((a, e) => a + (e.type === 'income' ? e.amount : e.type === 'expense' ? -e.amount : 0), 0);
     return `<div class="day-group"><div class="day-head"><span>${d.getMonth() + 1}月${d.getDate()}日（${WD[d.getDay()]}）</span><span>${yen(net)}</span></div>
       <ul class="entries">${items.map(e => entryRow(e, false)).join('')}</ul></div>`;
   }).join('');
@@ -284,6 +352,25 @@ function renderSettings() {
   const name = bookName(state.book);
   document.querySelectorAll('.cur-book').forEach(el => (el.textContent = name));
   $('#budgetInput').value = curBudget() || '';
+  const accts = acctsOf(state.book);
+  $('#assetPanel').hidden = accts.length > 0;
+  $('#acctEditor').innerHTML = accts.map(a => {
+    const op = state.openingByAccount[a.id];
+    const info = op
+      ? `いまの残高 ${yen(acctBalanceAt(state.book, a.id, '9999-12-31'))}（${fmtDate(op.date)} に ${yen(op.amount)} で設定）`
+      : '残高は未設定です';
+    return `<div class="acct-row">
+      <div class="acct-row-head">
+        <input type="text" maxlength="10" value="${esc(a.name)}" data-acct-rename="${a.id}" aria-label="置き場所の名前">
+        <button class="acct-del" data-acct-del="${a.id}" aria-label="削除">×</button>
+      </div>
+      <div class="row">
+        <input type="text" inputmode="numeric" class="money" placeholder="いまの残高" data-acct-amt="${a.id}">
+        <button class="btn" data-acct-set="${a.id}">残高を設定</button>
+      </div>
+      <p class="hint">${info}</p>
+    </div>`;
+  }).join('');
   const op = state.openingByBook[state.book];
   $('#assetInput').value = '';
   $('#assetSetInfo').textContent = op
@@ -314,6 +401,8 @@ function openSheet(entry) {
   state.formType = entry ? entry.type : 'expense';
   state.formBook = entry ? entry.book : state.book;
   state.formCat = entry ? entry.category : null;
+  state.formAccount = entry ? entry.account : null;
+  state.formToAccount = entry ? entry.toAccount : null;
   $('#amount').value = entry ? entry.amount.toLocaleString('ja-JP') : '';
   $('#date').value = entry ? entry.date : (state.ym === ymOf(new Date()) ? todayStr() : state.ym + '-01');
   $('#memo').value = entry ? entry.memo || '' : '';
@@ -329,10 +418,31 @@ function closeSheet() {
   state.editing = null;
 }
 function syncSheet() {
+  const accts = acctsOf(state.formBook);
+  const canTransfer = accts.length >= 2;
+  $('#segTransfer').hidden = !canTransfer;
+  if (state.formType === 'transfer' && !canTransfer) state.formType = 'expense';
+  const isTr = state.formType === 'transfer';
+  // 置き場所
+  $('#acctPick').hidden = !accts.length;
+  if (accts.length) {
+    const ids = accts.map(a => a.id);
+    if (!ids.includes(state.formAccount)) state.formAccount = ids.includes(state.lastAcct[state.formBook]) ? state.lastAcct[state.formBook] : ids[0];
+    if (isTr && (!ids.includes(state.formToAccount) || state.formToAccount === state.formAccount))
+      state.formToAccount = ids.find(id => id !== state.formAccount);
+    $('#acctFromLabel').textContent = isTr ? '移す元' : state.formType === 'income' ? '入金先' : '支払い元';
+    const pills = (sel, cur, attr) => ($(sel).innerHTML = accts.map(a =>
+      `<button type="button" class="tag ${a.id === cur ? 'active' : ''}" ${attr}="${a.id}">${esc(a.name)}</button>`).join(''));
+    pills('#acctFrom', state.formAccount, 'data-acct-from');
+    $('#acctToWrap').hidden = !isTr;
+    if (isTr) pills('#acctTo', state.formToAccount, 'data-acct-to');
+  }
+  $('#catPick').hidden = isTr;
   document.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.type === state.formType));
   $('#formBook').innerHTML = state.books.map(b =>
     `<button type="button" class="book-pill ${b.id === state.formBook ? 'active' : ''}" data-form-book="${b.id}">${esc(b.name)}</button>`).join('');
   $('#entryForm').dataset.book = state.formBook;
+  if (isTr) return;
   const cats = catsOf(state.formBook)[state.formType];
   if (!cats.includes(state.formCat)) state.formCat = cats[0];
   $('#catPick').innerHTML = cats.map(c =>
@@ -344,16 +454,25 @@ async function saveEntry(ev) {
   const amount = parseInt($('#amount').value.replace(/[^\d]/g, ''), 10);
   if (!amount) { toast('金額を入力してください'); return; }
   const isEdit = !!state.editing;
+  const accts = acctsOf(state.formBook);
+  const isTr = state.formType === 'transfer';
+  if (isTr && state.formAccount === state.formToAccount) { toast('移す元と移す先を別にしてください'); return; }
   const e = {
     id: state.editing ? state.editing.id : uid(),
     createdAt: state.editing ? state.editing.createdAt : Date.now(),
     book: state.formBook,
     type: state.formType,
     amount,
-    category: state.formCat,
+    category: isTr ? '振替' : state.formCat,
     date: $('#date').value || todayStr(),
     memo: $('#memo').value.trim(),
   };
+  if (accts.length) {
+    e.account = state.formAccount;
+    if (isTr) e.toAccount = state.formToAccount;
+    state.lastAcct[state.formBook] = state.formAccount;
+    db.setMeta('lastAcct', state.lastAcct);
+  }
   await db.put(e);
   const i = state.entries.findIndex(x => x.id === e.id);
   if (i >= 0) state.entries[i] = e; else state.entries.push(e);
@@ -365,13 +484,21 @@ async function saveEntry(ev) {
 
 /* ========== CSV ========== */
 function toCsv() {
-  const head = ['日付', '種別', 'カテゴリ', '金額', 'メモ', '帳簿', '記録日時'];
+  const head = ['日付', '種別', 'カテゴリ', '金額', 'メモ', '帳簿', '記録日時', '置き場所', '振替先'];
+  const TYPE = { income: '収入', expense: '支出', transfer: '振替' };
   const q = v => /[",\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
   const rows = [...state.entries].sort((a, b) => a.date.localeCompare(b.date))
-    .map(e => [e.date, e.type === 'income' ? '収入' : '支出', e.category, e.amount, e.memo || '', bookName(e.book), new Date(e.createdAt || 0).toISOString()].map(q).join(','));
+    .map(e => [e.date, TYPE[e.type], e.category, e.amount, e.memo || '', bookName(e.book), new Date(e.createdAt || 0).toISOString(),
+      acctName(e.book, e.account), e.type === 'transfer' ? acctName(e.book, e.toAccount) : ''].map(q).join(','));
   // 残高の設定もバックアップに入れる（メモ欄に設定した瞬間を記録）
   Object.entries(state.openingByBook).forEach(([bk, op]) =>
     rows.push([op.date, '残高設定', '', op.amount, new Date(op.setAt).toISOString(), bookName(bk)].map(q).join(',')));
+  Object.entries(state.accountsByBook).forEach(([bk, accts]) => accts.forEach(a => {
+    const op = state.openingByAccount[a.id];
+    rows.push(op
+      ? [op.date, '残高設定', '', op.amount, new Date(op.setAt).toISOString(), bookName(bk), '', a.name, ''].map(q).join(',')
+      : ['', '置き場所', '', '', '', bookName(bk), '', a.name, ''].map(q).join(','));
+  }));
   return '﻿' + [head.join(','), ...rows].join('\r\n');
 }
 function parseCsv(text) {
@@ -396,15 +523,33 @@ function parseCsv(text) {
 async function importCsv(file) {
   const rows = parseCsv(await file.text());
   if (rows.length && rows[0][0] === '日付') rows.shift();
+  // 置き場所の並び順を保つため、置き場所・残高設定の行を先に読む
+  const isSetup = r => r[1] === '置き場所' || r[1] === '残高設定';
+  rows.sort((x, y) => isSetup(y) - isSetup(x));
   const list = [];
   let openings = 0;
-  for (const [date, type, category, amount, memo, bookCol, createdCol] of rows) {
+  const ensureAcct = (bk, name) => {
+    name = String(name || '').trim();
+    if (!name) return undefined;
+    const list = (state.accountsByBook[bk] ||= []);
+    let a = list.find(x => x.name === name);
+    if (!a) { a = { id: uid(), name }; list.push(a); }
+    return a.id;
+  };
+  for (const [date, type, category, amount, memo, bookCol, createdCol, acctCol, toCol] of rows) {
+    if (type === '置き場所') {
+      const b = state.books.find(x => x.name === String(bookCol || '').trim());
+      if (b) ensureAcct(b.id, acctCol);
+      continue;
+    }
     if (type === '残高設定') {
       const b = state.books.find(x => x.name === String(bookCol || '').trim());
       const setAt = Date.parse(memo);
       const amt = parseInt(String(amount).replace(/[^\d-]/g, ''), 10);
       if (b && !isNaN(amt) && !isNaN(setAt)) {
-        state.openingByBook[b.id] = { amount: amt, date: String(date).trim(), setAt };
+        const op = { amount: amt, date: String(date).trim(), setAt };
+        const accId = ensureAcct(b.id, acctCol);
+        if (accId) state.openingByAccount[accId] = op; else state.openingByBook[b.id] = op;
         openings++;
       }
       continue;
@@ -412,23 +557,27 @@ async function importCsv(file) {
     const amt = parseInt(String(amount).replace(/[^\d]/g, ''), 10);
     const d = String(date).trim().replace(/\//g, '-').replace(/-(\d)(?=-|$)/g, '-0$1');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !amt) continue;
-    const t = type === '収入' ? 'income' : 'expense';
+    const t = type === '収入' ? 'income' : type === '振替' ? 'transfer' : 'expense';
     // 帳簿列がない古いCSVは、いま開いている帳簿に入れる
     const bk = (state.books.find(b => b.name === String(bookCol || '').trim()) || { id: state.book }).id;
-    const cat = (category || 'その他').trim();
-    const cats = catsOf(bk);
-    if (!cats[t].includes(cat)) cats[t].push(cat);
+    const cat = t === 'transfer' ? '振替' : (category || 'その他').trim();
+    if (t !== 'transfer') { const cats = catsOf(bk); if (!cats[t].includes(cat)) cats[t].push(cat); }
     const ca = Date.parse(createdCol);
-    list.push({ id: uid(), createdAt: isNaN(ca) ? Date.now() : ca, book: bk, date: d, type: t, category: cat, amount: amt, memo: (memo || '').trim() });
+    const e = { id: uid(), createdAt: isNaN(ca) ? Date.now() : ca, book: bk, date: d, type: t, category: cat, amount: amt, memo: (memo || '').trim() };
+    const acc = ensureAcct(bk, acctCol);
+    if (acc) e.account = acc;
+    if (t === 'transfer') { const to = ensureAcct(bk, toCol); if (!acc || !to) continue; e.toAccount = to; }
+    list.push(e);
   }
-  if (openings) await db.setMeta('openingByBook', state.openingByBook);
+  if (openings) { await db.setMeta('openingByBook', state.openingByBook); await db.setMeta('openingByAccount', state.openingByAccount); }
+  await db.setMeta('accountsByBook', state.accountsByBook);
   if (!list.length) {
     if (openings) { render(); renderSettings(); toast('残高の設定を読み込みました'); }
     else toast('読み込める行がありませんでした');
     return;
   }
   // 同じ内容の記録は重複させない
-  const key = e => [e.book, e.date, e.type, e.category, e.amount, e.memo].join('|');
+  const key = e => [e.book, e.date, e.type, e.category, e.amount, e.memo, e.account || '', e.toAccount || ''].join('|');
   const have = new Set(state.entries.map(key));
   const fresh = list.filter(e => !have.has(key(e)));
   await db.putMany(fresh);
@@ -436,6 +585,13 @@ async function importCsv(file) {
   state.entries.push(...fresh);
   render(); renderSettings();
   toast(`${fresh.length}件を読み込みました` + (list.length > fresh.length ? `（重複${list.length - fresh.length}件はスキップ）` : ''));
+}
+
+function moneyInput(e) {
+  const v = e.target.value.trim();
+  const neg = v.startsWith('-') || v.startsWith('−');
+  const n = v.replace(/[^\d]/g, '');
+  e.target.value = n ? (neg ? '-' : '') + Number(n).toLocaleString('ja-JP') : (neg ? '-' : '');
 }
 
 /* ========== イベント ========== */
@@ -466,6 +622,13 @@ function bind() {
   $('#entryForm').onsubmit = saveEntry;
 
   document.querySelectorAll('.seg-btn').forEach(b => (b.onclick = () => { state.formType = b.dataset.type; syncSheet(); }));
+  $('#acctPick').onclick = e => {
+    const f = e.target.closest('[data-acct-from]'), t = e.target.closest('[data-acct-to]');
+    if (f) { state.formAccount = f.dataset.acctFrom; if (state.formToAccount === state.formAccount) state.formToAccount = null; }
+    else if (t) state.formToAccount = t.dataset.acctTo;
+    else return;
+    syncSheet();
+  };
   $('#catPick').onclick = e => {
     const b = e.target.closest('[data-cat]');
     if (b) { state.formCat = b.dataset.cat; syncSheet(); }
@@ -494,12 +657,56 @@ function bind() {
 
   $('#assetCard').onclick = () => {
     go('settings');
-    setTimeout(() => { $('#assetPanel').scrollIntoView({ block: 'center' }); $('#assetInput').focus(); }, 50);
+    const hasAccts = acctsOf(state.book).length > 0;
+    setTimeout(() => {
+      $(hasAccts ? '#acctPanel' : '#assetPanel').scrollIntoView({ block: 'start' });
+      if (!hasAccts) $('#assetInput').focus();
+    }, 50);
   };
-  $('#assetInput').oninput = e => {
-    const neg = e.target.value.trim().startsWith('-') || e.target.value.trim().startsWith('−');
-    const n = e.target.value.replace(/[^\d]/g, '');
-    e.target.value = n ? (neg ? '-' : '') + Number(n).toLocaleString('ja-JP') : (neg ? '-' : '');
+  $('#assetInput').oninput = moneyInput;
+  $('#acctEditor').addEventListener('input', e => { if (e.target.classList.contains('money')) moneyInput(e); });
+  $('#acctEditor').onchange = async e => {
+    const id = e.target.dataset.acctRename;
+    if (!id) return;
+    const name = e.target.value.trim();
+    const a = acctsOf(state.book).find(x => x.id === id);
+    if (!name || acctsOf(state.book).some(x => x.name === name && x.id !== id)) { toast(name ? '同じ名前があります' : '名前を入力してください'); renderSettings(); return; }
+    a.name = name;
+    await db.setMeta('accountsByBook', state.accountsByBook);
+    render(); renderSettings(); toast('名前を変更しました');
+  };
+  $('#acctEditor').onclick = async e => {
+    const set = e.target.closest('[data-acct-set]'), del = e.target.closest('[data-acct-del]');
+    if (set) {
+      const id = set.dataset.acctSet;
+      const raw = $(`[data-acct-amt="${id}"]`).value.trim();
+      const amt = parseInt(raw.replace(/[^\d-]/g, ''), 10);
+      if (!raw || isNaN(amt)) { toast('残高を入力してください'); return; }
+      const name = acctName(state.book, id);
+      const had = !!state.openingByAccount[id];
+      if (had && !confirm(`「${name}」の残高を ${yen(amt)} に設定し直しますか？`)) return;
+      state.openingByAccount[id] = { amount: amt, date: todayStr(), setAt: Date.now() };
+      await db.setMeta('openingByAccount', state.openingByAccount);
+      render(); renderSettings(); toast(`${name}の残高を設定しました`);
+    } else if (del) {
+      const id = del.dataset.acctDel, name = acctName(state.book, id);
+      if (!confirm(`「${name}」を削除しますか？\n過去の記録は残りますが、この置き場所の残高は表示されなくなります。`)) return;
+      state.accountsByBook[state.book] = acctsOf(state.book).filter(a => a.id !== id);
+      delete state.openingByAccount[id];
+      await db.setMeta('accountsByBook', state.accountsByBook);
+      await db.setMeta('openingByAccount', state.openingByAccount);
+      render(); renderSettings(); toast('削除しました');
+    }
+  };
+  $('#addAcct').onclick = async () => {
+    const name = $('#newAcctName').value.trim();
+    if (!name) { toast('名前を入力してください'); return; }
+    const list = (state.accountsByBook[state.book] ||= []);
+    if (list.some(a => a.name === name)) { toast('同じ名前があります'); return; }
+    list.push({ id: uid(), name });
+    await db.setMeta('accountsByBook', state.accountsByBook);
+    $('#newAcctName').value = '';
+    render(); renderSettings(); toast(`「${name}」を追加しました。残高を設定してください`);
   };
   $('#saveAsset').onclick = async () => {
     const raw = $('#assetInput').value.trim();
@@ -581,6 +788,11 @@ async function init() {
       db.getMeta('openingByBook'),
     ]);
     state.openingByBook = openingByBook || {};
+    const [accountsByBook, openingByAccount, lastAcct] = await Promise.all([
+      db.getMeta('accountsByBook'), db.getMeta('openingByAccount'), db.getMeta('lastAcct')]);
+    state.accountsByBook = accountsByBook || {};
+    state.openingByAccount = openingByAccount || {};
+    state.lastAcct = lastAcct || {};
     if (books) state.books = books;
     state.catsByBook = catsByBook || {};
     state.budgetByBook = budgetByBook || {};
