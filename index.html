@@ -26,6 +26,12 @@
   <main>
     <!-- ホーム -->
     <section class="view active" id="view-home">
+      <div class="spend-card">
+        <span class="label" id="spendLabel">今月使った金額</span>
+        <span class="spend-value expense" id="sumExpense">¥0</span>
+        <span class="spend-sub" id="spendSub"></span>
+      </div>
+
       <button class="asset-card" id="assetCard" type="button">
         <span class="label" id="assetLabel">現在の残高</span>
         <span class="asset-value" id="assetValue">—</span>
@@ -35,8 +41,7 @@
 
       <div class="cards">
         <div class="card"><span class="label">収入</span><span class="value income" id="sumIncome">¥0</span></div>
-        <div class="card"><span class="label">支出</span><span class="value expense" id="sumExpense">¥0</span></div>
-        <div class="card wide"><span class="label">収支</span><span class="value" id="sumBalance">¥0</span></div>
+        <div class="card"><span class="label">収支</span><span class="value" id="sumBalance">¥0</span></div>
       </div>
 
       <div class="panel" id="budgetPanel">
@@ -78,6 +83,15 @@
         <h2>帳簿の名前</h2>
         <div id="bookNames" class="stack"></div>
         <p class="hint">入力欄をタップして名前を変えられます。以下の設定は、いま開いている帳簿（<b class="cur-book"></b>）のものです。</p>
+      </div>
+
+      <div class="panel">
+        <h2>「<span class="cur-book"></span>」の残高管理</h2>
+        <label class="switch-row">
+          <span>残高を管理する</span>
+          <input type="checkbox" id="balanceOn" role="switch">
+        </label>
+        <p class="hint">オンにすると、ホームに残高が表示され、記録のたびにお金の置き場所（口座・封筒など）を選べるようになります。オフのときは使った金額の管理だけになります。</p>
       </div>
 
       <div class="panel" id="acctPanel">

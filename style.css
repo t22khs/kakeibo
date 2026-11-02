@@ -95,6 +95,21 @@ main { max-width: 560px; margin: 0 auto; padding: 0 16px; }
 .view { display: none; }
 .view.active { display: block; }
 
+.spend-card {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px; margin-bottom: 10px;
+}
+.spend-value { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.spend-sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.spend-sub .up { color: var(--expense); font-weight: 600; }
+.spend-sub .down { color: var(--income); font-weight: 600; }
+.switch-row { display: flex; justify-content: space-between; align-items: center; min-height: 44px; font-weight: 600; cursor: pointer; }
+.switch-row input { appearance: none; width: 48px; height: 28px; border-radius: 99px; background: var(--line); position: relative; cursor: pointer; transition: background .15s; flex: none; }
+.switch-row input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .15s; }
+.switch-row input:checked { background: var(--accent); }
+.switch-row input:checked::after { left: 23px; }
+.legend .amt b { color: var(--text); font-weight: 600; margin-right: 6px; }
 .asset-card {
   width: 100%; text-align: left; cursor: pointer;
   display: flex; flex-direction: column; gap: 2px;

@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 /* ========== IndexedDB（データはこの端末の中に保存） ========== */
 const DB_NAME = 'kakeibo';
@@ -70,6 +70,7 @@ const state = {
   formBook: 'household',
   ym: ymOf(new Date()),       // 表示中の期間（期間が始まる月）
   startDayByBook: {},         // { bookId: 1〜28 } 1か月の始まりの日
+  balanceOnByBook: {},        // { bookId: true } 残高を管理するか（初期はオフ）
   filter: 'all',
   editing: null,
   formType: 'expense',
@@ -97,7 +98,9 @@ function balanceAt(bookId, untilDate) {
 }
 
 /* 置き場所（口座・封筒）ごとの残高 */
+const balanceOn = (b = state.book) => !!state.balanceOnByBook[b];
 const acctsOf = b => state.accountsByBook[b] || [];
+const activeAccts = b => balanceOn(b) ? acctsOf(b) : [];
 const acctName = (b, id) => (acctsOf(b).find(a => a.id === id) || {}).name || '';
 function acctDelta(e, accId) {
   if (e.type === 'transfer') return (e.toAccount === accId ? e.amount : 0) - (e.account === accId ? e.amount : 0);
@@ -206,6 +209,8 @@ async function switchBook(id) {
 }
 
 function renderAsset() {
+  $('#assetCard').hidden = !balanceOn();
+  if (!balanceOn()) return;
   const accts = acctsOf(state.book);
   $('#acctList').hidden = true;
   if (accts.length) return renderAcctAsset(accts);
@@ -273,6 +278,24 @@ function renderSummary(list) {
   const exp = list.filter(e => e.type === 'expense').reduce((a, e) => a + e.amount, 0);
   $('#sumIncome').textContent = yen(inc);
   $('#sumExpense').textContent = yen(exp);
+  const isCur = state.ym === curPeriod();
+  $('#spendLabel').textContent = isCur ? (startDay() > 1 ? 'この期間に使った金額' : '今月使った金額')
+    : (startDay() > 1 ? '使った金額' : `${Number(state.ym.slice(5))}月に使った金額`);
+  // 前の期間との比較（今の期間なら、前の期間の同じ日数までと比べる）
+  const prevYm = shiftYm(state.ym, -1);
+  const pr = periodRange(prevYm);
+  let prevEnd = pr.end, note = startDay() > 1 ? '前の期間' : '先月';
+  if (isCur) {
+    const elapsed = Math.round((new Date(todayStr() + 'T00:00:00') - new Date(periodRange(state.ym).start + 'T00:00:00')) / 86400000);
+    const d = new Date(pr.start + 'T00:00:00'); d.setDate(d.getDate() + elapsed);
+    if (ds(d) < prevEnd) { prevEnd = ds(d); note += 'の同じ時期'; }
+  }
+  const prevExp = state.entries.filter(e => e.book === state.book && e.type === 'expense' && e.date >= pr.start && e.date <= prevEnd)
+    .reduce((a, e) => a + e.amount, 0);
+  const diff = exp - prevExp;
+  $('#spendSub').innerHTML = prevExp || exp
+    ? `${note}は ${yen(prevExp)}` + (diff ? `（<span class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '+' : '−'}${yen(Math.abs(diff))}</span>）` : '（同じ）')
+    : '';
   const bal = $('#sumBalance');
   bal.textContent = yen(inc - exp);
   bal.className = 'value ' + (inc - exp < 0 ? 'expense' : 'income');
@@ -328,7 +351,7 @@ function renderDonut(list) {
      <text x="60" y="70" text-anchor="middle" font-size="11" font-weight="700" fill="var(--text)">${yen(total)}</text>`;
   legend.innerHTML = rows.map(([cat, v], i) =>
     `<li><span class="dot" style="background:${colorFor(cat, i)}"></span><span class="name">${esc(cat)}</span>
-     <span class="amt">${Math.round((v / total) * 100)}%</span></li>`).join('');
+     <span class="amt"><b>${yen(v)}</b>${Math.round((v / total) * 100)}%</span></li>`).join('');
 }
 function colorFor(cat, i) {
   const idx = curCats().expense.indexOf(cat);
@@ -381,7 +404,9 @@ function renderSettings() {
     .map(d => `<option value="${d}" ${d === S ? 'selected' : ''}>${d}</option>`).join('');
   $('#startDayEnd').textContent = S === 1 ? '末日' : `${S - 1}日`;
   const accts = acctsOf(state.book);
-  $('#assetPanel').hidden = accts.length > 0;
+  $('#balanceOn').checked = balanceOn();
+  $('#acctPanel').hidden = !balanceOn();
+  $('#assetPanel').hidden = !balanceOn() || accts.length > 0;
   $('#acctEditor').innerHTML = accts.map(a => {
     const op = state.openingByAccount[a.id];
     const info = op
@@ -446,7 +471,7 @@ function closeSheet() {
   state.editing = null;
 }
 function syncSheet() {
-  const accts = acctsOf(state.formBook);
+  const accts = activeAccts(state.formBook);
   const canTransfer = accts.length >= 2;
   $('#segTransfer').hidden = !canTransfer;
   if (state.formType === 'transfer' && !canTransfer) state.formType = 'expense';
@@ -482,7 +507,7 @@ async function saveEntry(ev) {
   const amount = parseInt($('#amount').value.replace(/[^\d]/g, ''), 10);
   if (!amount) { toast('金額を入力してください'); return; }
   const isEdit = !!state.editing;
-  const accts = acctsOf(state.formBook);
+  const accts = activeAccts(state.formBook);
   const isTr = state.formType === 'transfer';
   if (isTr && state.formAccount === state.formToAccount) { toast('移す元と移す先を別にしてください'); return; }
   const e = {
@@ -748,6 +773,12 @@ function bind() {
     render(); renderSettings();
     toast(had ? '残高を設定し直しました' : '残高を設定しました');
   };
+  $('#balanceOn').onchange = async e => {
+    state.balanceOnByBook[state.book] = e.target.checked;
+    await db.setMeta('balanceOnByBook', state.balanceOnByBook);
+    render(); renderSettings();
+    toast(e.target.checked ? '残高の管理をオンにしました' : '残高の管理をオフにしました');
+  };
   $('#startDay').onchange = async e => {
     const wasCur = state.ym === curPeriod();
     state.startDayByBook[state.book] = Number(e.target.value);
@@ -830,6 +861,7 @@ async function init() {
     state.openingByAccount = openingByAccount || {};
     state.lastAcct = lastAcct || {};
     state.startDayByBook = (await db.getMeta('startDayByBook')) || {};
+    state.balanceOnByBook = (await db.getMeta('balanceOnByBook')) || {};
     if (books) state.books = books;
     state.catsByBook = catsByBook || {};
     state.budgetByBook = budgetByBook || {};
